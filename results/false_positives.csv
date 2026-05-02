@@ -1,0 +1,5 @@
+task_id,task_type,rewards,won_count,d_K,t_K
+pick_and_place_simple-Pencil-None-Dresser-330/trial_T20190909_071128_012892,pick_and_place_simple,"[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0]",3,0.0,0.0
+pick_and_place_simple-Book-None-Sofa-229/trial_T20190907_042856_259139,pick_and_place_simple,"[1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0]",7,0.05,0.0
+pick_and_place_simple-SprayBottle-None-GarbageCan-409/trial_T20190908_054742_818364,pick_and_place_simple,"[1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]",5,0.0,0.0
+pick_and_place_simple-WineBottle-None-Shelf-7/trial_T20190907_200154_378982,pick_and_place_simple,"[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]",2,0.0,0.0

@@ -1,0 +1,228 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{titlesec}
+\usepackage{enumitem}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6em}
+
+\titleformat{\section}{\Large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.5em}{}
+
+\title{\vspace{-1.5cm}\bfseries How the GRPO Training Loss Is Defined,\\
+How It's Actually Computed, and Why the Numerical Value Sits Near Zero}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\section{Loss definition}
+
+For a single trajectory $i$ inside group $g$ (sampled with the current policy
+$\pi_\theta$), the policy-gradient loss is
+\begin{equation}
+\boxed{\;\;
+L_{g,i} \;=\; -\;A_{g,i}\;\cdot\;\overline{\log p_\theta}\!\left(\,\text{actions of trajectory }i\,\right)
+\;\;}
+\end{equation}
+
+\textbf{First factor --- the advantage} $A_{g,i}$ --- is the within-group
+$z$-score of the terminal reward:
+\begin{equation}
+A_{g,i} \;=\; \frac{r_{g,i} \;-\; \bar r_g}{\sigma_{r,g} \;+\; \varepsilon}
+\qquad
+\text{where}\;\; \bar r_g = \tfrac{1}{G}\sum_{j} r_{g,j},\;\;
+\sigma_{r,g} = \sqrt{\tfrac{1}{G}\sum_j (r_{g,j} - \bar r_g)^2}.
+\end{equation}
+
+In words: ``this trajectory's terminal reward, minus the average reward of
+the eight trajectories in its group, divided by the within-group reward
+standard deviation.''
+
+\textbf{Second factor --- the mean log-probability} $\overline{\log p_\theta}$
+--- is the policy's log-probability of the trajectory's actually-taken
+action tokens, averaged over those tokens:
+\begin{equation}
+\overline{\log p_\theta} \;=\; \frac{1}{T}\sum_{t=1}^{T} \log p_\theta\!\left(\text{token}_t \;\big|\; \text{prefix}_t\right).
+\end{equation}
+
+In words: ``during the rollout you actually emitted tokens
+$\text{token}_1, \dots, \text{token}_T$. Now run the model on the
+re-tokenized chat and ask: what log-probability does the (current) policy
+give to each of those exact tokens? Take the average.''
+
+\textbf{Total loss} is the average of $L_{g,i}$ over all trajectory items
+in the batch:
+\begin{equation}
+L_{\text{total}} \;=\; \frac{1}{n_{\text{items}}}\,\sum_{g,\,i} L_{g,i}.
+\end{equation}
+
+\section{How it is actually computed (in code)}
+
+See \texttt{scripts/17\_grpo\_static.py}. The compute path for one item is:
+
+\begin{enumerate}[leftmargin=2em]
+\item Concatenate \texttt{prefix} (system+user history) and the trajectory's
+\texttt{assistant\_text}, run a forward pass through the model:
+\begin{verbatim}
+out    = model(input_ids=enc["input_ids"], attention_mask=...)
+logits = out.logits[:, :-1, :]    # shape (1, T-1, V), V = 152K vocab
+\end{verbatim}
+
+\item For every token position, compute $-\log p_\theta(\text{label}_t)$ via
+chunked cross-entropy (chunked along the time axis to avoid materializing
+the full $(T \times V)$ log-softmax tensor):
+\begin{verbatim}
+nll = F.cross_entropy(logits, labels, reduction="none")
+# nll[t] = - log p_theta(token_t | prefix_t)
+\end{verbatim}
+
+\item Mask out the prefix region, average over the assistant region:
+\begin{verbatim}
+mean_logp = -(nll * assistant_mask).sum() / assistant_mask.sum()
+\end{verbatim}
+
+\item Form the per-item PG loss and \emph{immediately} call
+\texttt{.backward()} (must not accumulate
+$L_{\text{total}} \mathrel{+}= L_b$ across items --- that holds every
+forward pass's autograd graph in memory and OOMs):
+\begin{verbatim}
+loss_i = -(advantage * mean_logp) / n_items
+loss_i.backward()
+\end{verbatim}
+After the loop completes, call \texttt{optimizer.step()} once.
+\end{enumerate}
+
+\section{Why the loss numerically sits near zero}
+\label{sec:near_zero}
+
+The cleanest way to see this is with concrete numbers. Take a single group
+of $G = 8$ trajectories with terminal rewards
+\[
+\mathbf{r} \;=\; [\,1,\,1,\,0,\,0,\,1,\,0,\,1,\,0\,].
+\]
+Then
+\begin{align}
+\bar r &= 0.5,\\
+\sigma_r &= 0.5,\\
+A_i &= \frac{r_i - 0.5}{0.5} \;=\; [\,+1,\,+1,\,-1,\,-1,\,+1,\,-1,\,+1,\,-1\,].
+\end{align}
+
+\textbf{Crucial observation: $\;\sum_i A_i \;=\; 0\,$.}\;\;
+This is forced by the $z$-score normalization (the numerator subtracts the
+mean, so the standardized values sum to zero by construction).
+
+For a freshly initialized 7B policy, the per-token log-probability of
+short ``Thought:..\textbackslash nAction:..'' continuations is around $-3$
+(a vocabulary of 152K and slightly biased token frequencies). Suppose the
+eight trajectories happen to have slightly different mean log-probs:
+\[
+\overline{\log p_\theta} \;\approx\; [\,-3.1,\,-2.9,\,-3.0,\,-3.2,\,-2.8,\,-3.1,\,-2.9,\,-3.0\,].
+\]
+
+Then $\text{loss}_i = -A_i \cdot \overline{\log p_\theta}_i$:
+\begin{center}
+\begin{tabular}{cccr}
+\toprule
+$i$ & $A_i$ & $\overline{\log p_\theta}_i$ & $\text{loss}_i$ \\
+\midrule
+1 & $+1$ & $-3.1$ & $+3.1$ \\
+2 & $+1$ & $-2.9$ & $+2.9$ \\
+3 & $-1$ & $-3.0$ & $-3.0$ \\
+4 & $-1$ & $-3.2$ & $-3.2$ \\
+5 & $+1$ & $-2.8$ & $+2.8$ \\
+6 & $-1$ & $-3.1$ & $-3.1$ \\
+7 & $+1$ & $-2.9$ & $+2.9$ \\
+8 & $-1$ & $-3.0$ & $-3.0$ \\
+\midrule
+\multicolumn{3}{r}{$\sum_i$} & $-0.6$ \\
+\multicolumn{3}{r}{$\div\,n_{\text{items}}\!=\!64$} & $\boxed{\approx -0.009}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This number is exactly in the range we observed empirically
+($[-0.01,\,+0.06]$ across 20 training steps).
+
+\section{The intuition}
+
+Each individual term $\text{loss}_i$ has magnitude $\sim 3$ (because
+$|A_i| \approx 1$ and $|\overline{\log p_\theta}_i| \approx 3$).
+\textbf{But $\sum_i A_i = 0$ kills the bulk of those $\pm 3$
+contributions almost completely.}
+
+What survives is the correlation between $A_i$ and the \emph{deviation} of
+$\overline{\log p_\theta}_i$ from its group mean:
+\begin{equation}
+L_{\text{total}} \;\approx\; \sum_i A_i \cdot \Bigl(\,\overline{\log p_\theta}_i \;-\; \mathrm{mean}\bigl(\overline{\log p_\theta}\bigr)\,\Bigr).
+\label{eq:residual}
+\end{equation}
+
+That correlation is the genuine training signal --- and it is small in
+magnitude precisely because the policy at any given moment doesn't yet
+distinguish good from bad trajectories all that strongly. Hence
+$L_{\text{total}} \sim 0.01$ in absolute value. \textbf{This is not a bug;
+it is the definitional behaviour of GRPO.}
+
+\section{Why the loss is not expected to monotonically decrease}
+
+\begin{itemize}[leftmargin=1.6em]
+\item \textbf{Supervised-learning loss} measures ``how wrong is the
+prediction'' --- it is bounded below by zero and decreases monotonically as
+the model learns.
+
+\item \textbf{Policy-gradient loss} (REINFORCE / GRPO) is constructed so
+that its \emph{gradient} is an unbiased estimator of $\nabla J(\theta)$,
+the expected reward gradient. Its \emph{value} is just an artefact: by the
+group-centering $\sum_i A_i = 0$, the loss has expected value $0$. It
+oscillates around $0$ regardless of whether the policy is improving.
+\end{itemize}
+
+A useful analogy: a supervised loss is like ``how far you are from the
+finish line'' --- decreasing means you are getting closer. A
+policy-gradient loss is like ``which way is the wind blowing'' --- the
+direction carries information, but the wind \emph{speed} does not have
+to fall to zero as you sail.
+
+\section{What you should look at instead of the loss}
+
+To check whether GRPO training is doing useful work, the right diagnostics
+are:
+
+\begin{enumerate}[leftmargin=1.6em]
+\item \textbf{LoRA gradient $\bm{L^2}$ norm trend}: should slowly decay as
+the policy becomes more confident in its preferred actions. Across our
+20 steps it bounces in $[0.05,\,0.20]$ without a clear trend --- meaning
+``the trainer is producing real gradients'' but ``too few steps to see
+convergence dynamics.''
+
+\item \textbf{Held-out task reward / success rate}: roll out the
+\emph{updated} model on a held-out task suite and measure win rate.
+\textbf{We have not done this yet}, so any claim that the model is
+``getting better at ALFWorld'' is currently unsupported.
+\end{enumerate}
+
+\section{What the experiment as it stands does and does not show}
+
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+\textbf{Claim} & \textbf{Evidence} \\
+\midrule
+The loss is computed correctly (forward, backward, optimizer all run) & \checkmark \\
+The gradient signal magnitude is preserved (baseline 0.086, gated 0.098) & \checkmark \\
+The gate saves 32.2\% wall-clock per training step & \checkmark \\
+The model becomes better at ALFWorld & \emph{not measured} \\
+The training run is converged & \emph{no} (20 steps; loss is also not the right indicator) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

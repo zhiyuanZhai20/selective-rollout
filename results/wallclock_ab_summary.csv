@@ -1,0 +1,2 @@
+n_tasks,wall_total_baseline_s,wall_total_gated_s,wall_savings_pct,step_tokens_baseline,step_tokens_gated,step_tokens_savings_pct,gate_cut_groups,gate_TP_zero_var,gate_FP_non_zero_var
+100,2678.584545135498,2380.2040569782257,11.139483676151,18189,16054,11.73786354390016,15,15,0

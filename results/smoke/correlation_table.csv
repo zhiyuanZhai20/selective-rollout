@@ -1,0 +1,8 @@
+K,metric,n,spearman_rho,p_value
+5,unique_action_ratio,2,,
+5,unique_prefix_ratio,2,,
+5,action_bigram_jaccard_mean,2,,
+5,prefix_edit_distance_mean,2,,
+5,obs_unique_ratio,2,,
+5,termination_fraction,2,,
+5,action_entropy,2,,

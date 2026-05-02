@@ -1,0 +1,46 @@
+# Symlinks to large external data directories (point outside repo)
+data
+alfworld_data
+
+# Generated / intermediate
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.DS_Store
+.ipynb_checkpoints/
+
+# LaTeX intermediate
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.toc
+
+# Large training artefacts (LoRA adapters, train logs) — don't push
+runs/
+logs/
+
+# Older bundles / submission archives
+paper_bundle/
+paper_bundle.zip
+submission/
+
+# Reference PDFs and template archives not part of project
+6514_*.pdf
+*.zip
+
+# Paper artefacts kept out of the repo: conference template files,
+# the compiled PDF, and the venue-specific reviewer checklist
+# (rebuildable locally; venue-specific, not part of the open-sourced code).
+paper/*.sty
+paper/*.pdf
+paper/checklist.tex
+
+# Claude Code session artefacts
+.claude/

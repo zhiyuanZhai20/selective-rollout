@@ -1,0 +1,4 @@
+setting,save_per_cut_pct,total_save_pct,answer_preservation_pct,note
+GRPO training,66.66666666666666,14.000000000000002,96.7,cuts all G of zero-var; advantage L2 preserved from offline
+self-consistency,58.33333333333333,12.249999999999998,94.64285714285714,"cuts G-1, lets 1 finish; majority vote preservation"
+best-of-N,58.33333333333333,12.249999999999998,94.64285714285714,identical mechanic; verifier picks survivor
